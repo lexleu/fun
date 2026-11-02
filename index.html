@@ -3,11 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>大肥鱼的第一款小游戏 · 贪吃蛇</title>
+<title>跟大肥鱼学的贪吃蛇</title>
 <style>
-  body{margin:0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
-       background:#0f1420;color:#dbe6f2;font-family:system-ui,"Microsoft YaHei",sans-serif;gap:14px;touch-action:none;}
-  canvas{background:#131a28;border-radius:10px;box-shadow:0 0 0 1px #263149,0 12px 40px #0008;max-width:96vw;height:auto;}
+   body{margin:0;height:100vh;height:100dvh;box-sizing:border-box;overflow:hidden;
+       display:flex;flex-direction:column;align-items:center;justify-content:center;
+       background:#0f1420;color:#dbe6f2;font-family:system-ui,"Microsoft YaHei",sans-serif;gap:14px;
+       touch-action:none;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);}
+  canvas{background:#131a28;border-radius:10px;box-shadow:0 0 0 1px #263149,0 12px 40px #0008;
+         max-width:96vw;max-height:calc(100vh - 110px);max-height:calc(100dvh - 110px);
+         width:auto;height:auto;}
   #hud{font-size:15px;letter-spacing:.5px;opacity:.85}
   #tip{font-size:12px;opacity:.45}
 </style>
@@ -15,12 +19,12 @@
 <body>
 <canvas id="c" width="416" height="728"></canvas>
 <div id="hud">分数 <b id="score">0</b> 最高 <b id="best">0</b></div>
-<div id="tip">方向键 / WASD 移动　空格重开</div>
+<div id="tip">手指滑动转向　点一下重开</div>
 
 <script>
 // ===== 1. 常量：改这几个数就能改手感 =====
-const CELL = 26;            // 每格 30 像素（我决定听大肥鱼的，好好写注释）
-const COLS = 16, ROWS = 28; // 30×20 的格子
+const CELL = 26;            // 每格 26 像素（我决定听大肥鱼的，好好写注释）
+const COLS = 16, ROWS = 28; // 16X28 的格子
 let SPEED = 250;          // 每走一步隔多久（毫秒）。数字越小越快
 
 const canvas = document.getElementById('c');
@@ -30,6 +34,8 @@ const bestEl = document.getElementById('best');
 
 // ===== 2. 游戏状态 =====
 let snake, dir, nextDir, food, score, dead, acc, lastTime, enemy, stepCount;
+
+let muted = loadMuted();     // 开机就问一句：上次是静音状态吗？
 
 function reset() {
   snake = [{x:10,y:10},{x:9,y:10},{x:8,y:10}]; // 头在第一个
@@ -55,6 +61,18 @@ function reset() {
 }
  function saveBest(v) {
    localStorage.setItem('snake-best',String(v));
+}
+ // 静音开关的存档（localStorage 只能存字符串，所以用 '1' / '0'）
+function loadMuted() {
+  try { return localStorage.getItem('snake-muted') === '1'; }
+  catch (e) { return false; }
+}
+function saveMuted() {
+  try { localStorage.setItem('snake-muted', muted ? '1' : '0'); } catch (e) {}
+}
+function toggleMute() {
+  muted = !muted;
+  saveMuted();               // 改完立刻存
 }
 
 // 在空格子里随机放一个食物
@@ -94,6 +112,7 @@ function moveEnemy(){
 //死的时候判断要不要存档
 function die() {
    dead=true;
+    beep(440, 0.45, 110); 
     if(score > loadBest()) { //破纪录才存
        saveBest(score);
        bestEl.textContent = score;
@@ -115,6 +134,7 @@ function step() {
   snake.unshift(head);                 // 新头加在最前面
   if (head.x===food.x && head.y===food.y) {
     score++;                           // 吃到：不删尾巴，等于变长
+    beep(880, 0.08);
     SPEED = Math.max(60, SPEED - 8);
     scoreEl.textContent = score;
     food = randomFood();
@@ -164,9 +184,55 @@ function draw() {
     ctx.fillText('撞了！得分 ' + score, canvas.width/2, canvas.height/2 - 6);
     ctx.font = '14px system-ui,"Microsoft YaHei"';
     ctx.fillStyle = '#8fa3bd';
-    ctx.fillText('按空格重开', canvas.width/2, canvas.height/2 + 24);
+    ctx.fillText('按空格重开', canvas.width/2, canvas.height/2 + 24);    
+   }
+      drawMuteButton();     // 最后画按钮，保证它在所有东西上面
+}
+
+ // ===== 4.5 静音按钮 =====
+     const BTN = {x: COLS*CELL - 44, y: 6, w: 38, h: 30};   // 按钮的方框
+
+     function drawMuteButton() {
+       // 1. 半透明底，让图标在任何背景上都看得见
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(BTN.x, BTN.y, BTN.w, BTN.h);
+
+      // 2. 喇叭：一个方块（底座）+ 一个三角形（喇叭口）
+      const cx = BTN.x + 13, cy = BTN.y + BTN.h / 2;
+      ctx.fillStyle = muted ? '#8fa3bd' : '#7ad4ff';   // 静音灰，有声亮蓝
+      ctx.fillRect(cx - 7, cy - 4, 6, 8);
+
+      ctx.beginPath(); 
+      ctx.moveTo(cx - 1, cy - 4);
+      ctx.lineTo(cx + 6, cy - 9);
+      ctx.lineTo(cx + 6, cy + 9);
+      ctx.lineTo(cx - 1, cy + 4);
+      ctx.closePath();
+      ctx.fill();
+
+      // 3. 静音时划一道斜杠
+     if (muted) {
+    ctx.strokeStyle = '#ff5c7a';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(BTN.x + 24, BTN.y + 7);
+    ctx.lineTo(BTN.x + 34, BTN.y + BTN.h - 7);
+    ctx.stroke();
   }
 }
+
+// 判断某个屏幕坐标是不是点在喇叭上
+function hitButton(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();          // 每次现取，别缓存
+  const x = (clientX - r.left) * canvas.width / r.width;
+  const y = (clientY - r.top) * canvas.height / r.height;
+  return x >= BTN.x && x <= BTN.x + BTN.w && y >= BTN.y && y <= BTN.y + BTN.h;
+}
+
+// 按下就响应（鼠标和手指都管）
+canvas.addEventListener('pointerdown', e => {
+  if (hitButton(e.clientX, e.clientY)) toggleMute();
+});
 
 // ===== 5. 主循环：按时间累积，到点走一步 =====
 function loop(now) {
@@ -185,8 +251,10 @@ const KEYMAP = {
   ArrowUp:{x:0,y:-1}, ArrowDown:{x:0,y:1}, ArrowLeft:{x:-1,y:0}, ArrowRight:{x:1,y:0},
   w:{x:0,y:-1}, s:{x:0,y:1}, a:{x:-1,y:0}, d:{x:1,y:0},
 };
-document.addEventListener('keydown', e => {
+  document.addEventListener('keydown', e => {
+  initAudio();
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (k === 'm') { toggleMute(); return; }
   if (e.code === 'Space') { e.preventDefault(); reset(); return; }
   const d = KEYMAP[k];
   if (!d) return;
@@ -200,6 +268,7 @@ document.addEventListener('keydown', e => {
 let touchStart =null;
 
 canvas.addEventListener('touchstart', e =>{
+   initAudio();
    if(dead) { reset(); return; }  //死了就摸一下重开
    const t = e.changedTouches[0];
    touchStart = {x:t.clientX, y: t.clientY};
@@ -222,6 +291,35 @@ canvas.addEventListener('touchend', e=>{
    if(d.x === -dir.x && d.y === -dir.y) return;             //不能180°掉头
   nextDir = d;
 },{passive:false});
+
+//====== 8 音效 =======
+let actx = null;
+
+function initAudio() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+   if (actx.state !== 'running') actx.resume();   // suspended / interrupted 都试一下
+}
+
+function beep(freq, dur,freqEnd) {
+  if (!actx || muted || actx.state !== 'running') return;
+  const o = actx.createOscillator();
+  const g = actx.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(freq, actx.currentTime);
+  if (freqEnd) o.frequency.exponentialRampToValueAtTime(freqEnd, actx.currentTime + dur);
+  g.gain.value = 0.06;
+  g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+  o.connect(g);
+  g.connect(actx.destination);
+  o.start();
+  o.stop(actx.currentTime + dur);
+}
+
+ function unlockWechatAudio() {
+  if (typeof WeixinJSBridge === 'undefined' || !WeixinJSBridge.invoke) return;
+  WeixinJSBridge.invoke('getNetworkType', {}, () => { initAudio(); });
+}
+  document.addEventListener('WeixinJSBridgeReady', unlockWechatAudio, false);
 
 reset();
 requestAnimationFrame(loop);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>跟大肥鱼学的贪吃蛇</title>
+<title>贪吃蛇</title>
 <style>
    body{margin:0;height:100vh;height:100dvh;box-sizing:border-box;overflow:hidden;
        display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -34,21 +34,30 @@ const bestEl = document.getElementById('best');
 
 // ===== 2. 游戏状态 =====
 let snake, dir, nextDir, food, score, dead, acc, lastTime, enemy, stepCount;
-
+let enemyStun = 0;       // 还要晕几步
+let enemyMoves = 0;      // 怪走了几步
+const DASH_EVERY = 4;    // 怪每移动几次冲刺一次（你改的 4 就放这）
+const STUN_STEPS = 6;    // 撞到后晕几步（嫌短就加大）
+let enemyRespawnAt = 0;  // 0 = 活着；否则是"重生时间戳"
+let boostUntil = 0;      // 吃到怪后的加速截止时间
 let muted = loadMuted();     // 开机就问一句：上次是静音状态吗？
 
 function reset() {
   snake = [{x:10,y:10},{x:9,y:10},{x:8,y:10}]; // 头在第一个
   dir = {x:1,y:0};        // 往右
   nextDir = dir;
+  enemy={x:13,y:4,dx:1,dy:0};   //位置和方向  
   food = randomFood();
   score = 0;
   dead = false;
   acc = 0;
   lastTime = performance.now();
   SPEED = 250;            // 每局开始把速度复原，不然会一局比一局快
-  enemy={x:13,y:4,dx:1,dy:0};   //位置和方向
   stepCount=0;
+  enemyRespawnAt = 0;
+  boostUntil = 0;
+  enemyStun = 0;
+  enemyMoves = 0;
   scoreEl.textContent = '0';
   bestEl.textContent = loadBest();
 }
@@ -79,34 +88,38 @@ function toggleMute() {
 function randomFood() {
   while (true) {
     const p = {x: Math.floor(Math.random()*COLS), y: Math.floor(Math.random()*ROWS)};
-    if (!snake.some(s => s.x===p.x && s.y===p.y)) return p;
-  }
+     if (!snake.some(s => s.x === p.x && s.y === p.y) && !(p.x === enemy.x && p.y === enemy.y)) return p;
+ }
 }
-// 怪每走一格；撞墙就掉头
-function moveEnemy(){
-  //1.先算：怪和蛇头差了几格
-  const dx = snake[0].x- enemy.x;
-  const dy = snake[0].y- enemy.y;
 
-  //2.试着朝蛇头方向走一格
-  const tryStep = (sx,sy) =>{
-     const nx = enemy.x + sx, ny = enemy.y + sy;
-     if (nx<0 || nx >= COLS || ny < 0 || ny>= ROWS) return false;
-     enemy.x = nx;
-     enemy.y = ny;
-     return true;
-};
 
-  //3.先走差距大的方向  
-  const preferX = Math.abs(dx) >= Math.abs(dy);
-  const plan =preferX
-    ?[[Math.sign(dx),0],[0, Math.sign(dy)]]
-    :[[0,Math.sign(dy)],[Math.sign(dx),0]];
 
-  for (const [sx,sy] of plan) {
-    if((sx || sy) && tryStep(sx,sy))return; //youfangxiancaizou
-  }    
- //两个方向都堵死时候不动
+// 怪每走一格：平时 BFS 追，每 6 次冲动一次
+function moveEnemy() {
+  if (enemyRespawnAt) {                             // 已经被吃掉了，等重生
+    if (performance.now() >= enemyRespawnAt) respawnEnemy();
+    return;
+  }
+  if (enemyStun > 0) { enemyStun--; return; }    // 晕着，不动
+
+  enemyMoves++;
+  if (enemyMoves % DASH_EVERY === 0) {                    // 每 4 次 → 冲刺
+    const dx = Math.sign(snake[0].x - enemy.x);
+    const dy = Math.sign(snake[0].y - enemy.y);
+    for (let i = 0; i < 2; i++) {                // 连冲 3 格
+      const preferX = Math.abs(snake[0].x - enemy.x) >= Math.abs(snake[0].y - enemy.y);
+      const nx = enemy.x + (preferX ? dx : 0);
+      const ny = enemy.y + (preferX ? 0 : dy);
+      if (nx === snake[0].x && ny === snake[0].y) { enemy.x = nx; enemy.y = ny; return; }  // 正好撞到你
+      if (blocked(nx, ny)) { enemyStun = STUN_STEPS; beep(220, 0.25, 80); return; }  // 撞到蛇身 → 晕
+      enemy.x = nx; enemy.y = ny;
+    }
+    return;
+  }
+
+  const step = findStep();                       // 平时：BFS
+  if (!step) { enemyStun = STUN_STEPS; return; }          // 被围死 → 也晕
+  enemy.x = step.x; enemy.y = step.y;
 }
 
 //死的时候判断要不要存档
@@ -142,8 +155,26 @@ function step() {
     snake.pop();                       // 没吃到：删尾巴，长度不变
   }
 
-  // 怪和头撞在一起就死（放在最后，吃到和没吃到都检查）
-  if (enemy.x === snake[0].x && enemy.y === snake[0].y) die();
+ // 蛇身扫过怪物 → 把它缠晕（顺便解决重合的手感问题，也是一条新战术）
+  if (!enemyRespawnAt && enemyStun === 0 &&
+      snake.some((s, i) => i > 0 && s.x === enemy.x && s.y === enemy.y)) {
+    enemyStun = STUN_STEPS;
+  }
+ 
+   // 怪和头撞在一起：它晕着就是你吃它，否则你死
+  if (!enemyRespawnAt && enemy.x === snake[0].x && enemy.y === snake[0].y) {
+    if (enemyStun > 0) {
+      score += 3;
+      scoreEl.textContent = score;
+      beep(1046, 0.1);                      // 吃到怪的"叮咚"
+      beep(1568, 0.12);
+      enemyRespawnAt = performance.now() + 5000;   // 5 秒后重生
+      boostUntil = performance.now() + 3000;       // 加速 3 秒
+      enemyStun = 0;
+    } else {
+      die();
+    }
+  }
 }
 
 // ===== 4. 画出来 =====
@@ -165,14 +196,19 @@ function draw() {
   ctx.beginPath();
   ctx.arc(food.x*CELL + CELL/2, food.y*CELL + CELL/2, CELL*0.32, 0, Math.PI*2);
   ctx.fill();
-
+  
+  //怪 （晕了就变灰）
+  if (!enemyRespawnAt) {
+  ctx.fillStyle = enemyStun > 0 ? '#6b7787' : '#ff5c7a';   // 晕了就变灰
+  ctx.fillRect(enemy.x*CELL + 3,enemy.y*CELL + 3, CELL - 6, CELL-6);
+  }
+  
   // 蛇：头亮一点
   snake.forEach((s, i) => {
     ctx.fillStyle = i === 0 ? '#7ad4ff' : '#3f8ec4';
     ctx.fillRect(s.x*CELL + 2, s.y*CELL + 2, CELL - 4, CELL - 4);
   });
-    ctx.fillStyle = '#ff5c7a';
-    ctx.fillRect(enemy.x*CELL + 3,enemy.y*CELL + 3, CELL - 6, CELL-6);
+   
 
   // 结束提示
   if (dead) {
@@ -181,10 +217,10 @@ function draw() {
     ctx.fillStyle = '#dbe6f2';
     ctx.textAlign = 'center';
     ctx.font = '20px system-ui,"Microsoft YaHei"';
-    ctx.fillText('撞了！得分 ' + score, canvas.width/2, canvas.height/2 - 6);
+    ctx.fillText('咚！得分 ' + score, canvas.width/2, canvas.height/2 - 6);
     ctx.font = '14px system-ui,"Microsoft YaHei"';
     ctx.fillStyle = '#8fa3bd';
-    ctx.fillText('按空格重开', canvas.width/2, canvas.height/2 + 24);    
+    ctx.fillText('点击下一把', canvas.width/2, canvas.height/2 + 24);    
    }
       drawMuteButton();     // 最后画按钮，保证它在所有东西上面
 }
@@ -236,11 +272,12 @@ canvas.addEventListener('pointerdown', e => {
 
 // ===== 5. 主循环：按时间累积，到点走一步 =====
 function loop(now) {
-  const dt = now - lastTime;
+  const dt = now - lastTime;                 // 这一帧过了多少毫秒
   lastTime = now;
   if (!dead) {
-    acc += dt;
-    while (acc >= SPEED) { acc -= SPEED; step(); if (dead) break; }
+    const spd = performance.now() < boostUntil ? Math.max(50, SPEED * 0.6) : SPEED;
+    acc += dt;                               // 先攒时间
+    while (acc >= spd) { acc -= spd; step(); if (dead) break; }   // 再按 spd 走
   }
   draw();
   requestAnimationFrame(loop);
@@ -320,6 +357,68 @@ function beep(freq, dur,freqEnd) {
   WeixinJSBridge.invoke('getNetworkType', {}, () => { initAudio(); });
 }
   document.addEventListener('WeixinJSBridgeReady', unlockWechatAudio, false);
+
+  // ===== 9. 怪物寻路 =====
+const DIRS = [[1,0], [-1,0], [0,1], [0,-1]];   // 右 左 下 上
+
+function blocked(x, y) {
+  if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return true;   // 出界
+  if (snake.some(s => s.x === x && s.y === y)) return true;    // 蛇身
+  return false;
+}
+
+// 问 BFS：从怪走到蛇头，第一步该迈哪
+function findStep() {
+  const start = {x: enemy.x, y: enemy.y};   // 出发地
+  const target = snake[0];                  // 目的地：蛇头
+  if (start.x === target.x && start.y === target.y) return null;
+
+  const from = new Map();                   // 面包屑：每个格子是从哪儿来的
+  from.set(start.x + ',' + start.y, null);  // 起点没有来源
+  const queue = [start];                    // 待探索的格子（队列）
+
+  while (queue.length > 0) {
+    const cur = queue.shift();              // 取队首（先进先出）
+
+    for (const [dx, dy] of DIRS) {
+      const nx = cur.x + dx, ny = cur.y + dy;
+      const key = nx + ',' + ny;
+
+      if (from.has(key)) continue;          // 来过就别再来
+      const isTarget = (nx === target.x && ny === target.y);
+      if (!isTarget && blocked(nx, ny)) continue;   // 是头就特批放行
+
+      from.set(key, cur);                   // 撒面包屑：nx,ny 是 cur 走过来的
+      if (isTarget) {
+        // 到了！顺着面包屑倒着走，走到"起点后面那一个"就是第一步
+        let node = {x: nx, y: ny};
+        while (true) {
+          const parent = from.get(node.x + ',' + node.y);
+          if (!parent) return null;
+          if (parent.x === start.x && parent.y === start.y) return node;
+          node = parent;
+        }
+      }
+      queue.push({x: nx, y: ny});           // 加进待探索
+    }
+  }
+  return null;   // 队伍空了还没到 → 走不通（被围死）
+}
+
+// 怪重生：随机找个远离蛇头的空位
+function respawnEnemy() {
+  while (true) {
+    const p = {x: Math.floor(Math.random()*COLS), y: Math.floor(Math.random()*ROWS)};
+    if (snake.some(s => s.x === p.x && s.y === p.y)) continue;                 // 别落在蛇身上
+    if (Math.abs(p.x - snake[0].x) + Math.abs(p.y - snake[0].y) < 6) continue; // 离头太近不行
+    enemy.x = p.x;
+    enemy.y = p.y;
+    enemyStun = 0;
+    enemyMoves = 0;
+    enemyRespawnAt = 0;
+    return;
+  }
+}
 
 reset();
 requestAnimationFrame(loop);
